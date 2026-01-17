@@ -1,0 +1,61 @@
+{
+  "merchantId": "dongli",
+  "hotQuestions": [
+    {
+      "id": "hot_001",
+      "question": "门票多少钱",
+      "keywords": [
+        "门票",
+        "价格",
+        "多少钱",
+        "票价",
+        "收费",
+        "费用"
+      ],
+      "answer": "您好！东里村景区成人票60元/人，学生票30元/人（需凭学生证），60岁以上老人免费（需凭身份证）。",
+      "hitCount": 6,
+      "lastUpdated": "2026-01-15T23:28:00Z",
+      "enabled": true,
+      "createdAt": "2026-01-15T23:28:00Z",
+      "source": "manual"
+    },
+    {
+      "id": "hot_002",
+      "question": "开放时间",
+      "keywords": [
+        "开放",
+        "时间",
+        "几点",
+        "营业",
+        "开门",
+        "关门"
+      ],
+      "answer": "景区每天8:00-17:30开放，节假日延长至18:00。建议您提前规划好行程哦~",
+      "hitCount": 0,
+      "lastUpdated": "2026-01-15T23:28:00Z",
+      "enabled": true,
+      "createdAt": "2026-01-15T23:28:00Z",
+      "source": "manual"
+    },
+    {
+      "id": "hot_003",
+      "question": "怎么去",
+      "keywords": [
+        "怎么去",
+        "路线",
+        "交通",
+        "怎么走",
+        "在哪",
+        "地址"
+      ],
+      "answer": "东里村景区位于福建省莆田市秀屿区东峤镇。您可以乘坐公交361路到东里村站下车，或自驾导航\"东里村景区\"即可。",
+      "hitCount": 4,
+      "lastUpdated": "2026-01-15T23:28:00Z",
+      "enabled": true,
+      "createdAt": "2026-01-15T23:28:00Z",
+      "source": "manual"
+    }
+  ],
+  "updatedAt": 1768644413813,
+  "version": 3
+}

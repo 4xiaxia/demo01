@@ -1,0 +1,6 @@
+{
+    "scripts": {
+        "start": "node --loader ts-node/esm server/server.ts",
+        "dev:server": "tsx watch server/server.ts"
+    }
+}

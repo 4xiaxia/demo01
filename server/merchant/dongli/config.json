@@ -1,0 +1,49 @@
+{
+  "merchantId": "dongli",
+  "name": "东里村智能导游",
+  "avatar": "🏞️",
+  "dataSource": {
+    "knowledge": "local",
+    "hotQuestions": "local",
+    "config": "local"
+  },
+  "cache": {
+    "enabled": true,
+    "ttl": 300,
+    "provider": "dragonfly"
+  },
+  "api": {
+    "provider": "zhipu",
+    "apiKey": "",
+    "model": "glm-4-flash"
+  },
+  "prompts": {
+    "system": "你是东里村的智能导游助手，请友好、专业地回答游客的问题。东里村是一个风景优美的古村落，有瀑布、古建筑等景点。",
+    "welcome": "您好！欢迎来到东里村，我是智能导游小助手，有什么可以帮您的？",
+    "chitchat": "我是东里村的导游助手，专门回答景区相关问题哦~有什么想了解的吗？",
+    "fallback": {
+      "timeout": "抱歉让您久等了，我需要稍微整理一下思路。您的问题已经记录，稍后会给您满意的答复！",
+      "error": "系统有点小状况，正在调整中。如需紧急帮助，请联系景区工作人员（电话：0592-1234567）",
+      "notFound": "这个问题有点超出我的知识范围了，已经记录下来反馈给景区工作人员。您还可以问问其他关于景区的问题~",
+      "offline": "我有点不舒服，正在休息调整。您的问题我已经记下来啦，恢复后会第一时间回复您！❤️"
+    }
+  },
+  "theme": {
+    "primaryColor": "#1042b7",
+    "title": "东里村智能导游"
+  },
+  "asr": {
+    "provider": "zhipu",
+    "model": "glm-asr-2512",
+    "apiUrl": "https://open.bigmodel.cn/api/paas/v4",
+    "apiKey": ""
+  },
+  "tts": {
+    "provider": "zhipu",
+    "model": "glm-tts",
+    "apiUrl": "https://open.bigmodel.cn/api/paas/v4",
+    "apiKey": ""
+  },
+  "defaultInputType": "text",
+  "apiSource": "system"
+}
