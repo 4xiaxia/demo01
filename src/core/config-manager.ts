@@ -109,6 +109,13 @@ class ConfigManager {
 
   /**
    * 获取当前房间号（MerchantId）
+   *
+   * 优先级：
+   * 1. URL 查询参数 ?merchant=xxx（前台聊天页面）
+   * 2. 路由路径 /merchant/{id}/（后台管理页面）
+   * 3. localStorage 存储的 merchantId（登录时保存）
+   * 4. 已加载的配置
+   * 5. 环境变量兜底
    */
   getMerchantId(): string {
     // 1. URL 参数优先 ?merchant=xxx
@@ -116,10 +123,18 @@ class ConfigManager {
     const urlId = params.get("merchant");
     if (urlId) return urlId;
 
-    // 2. 已加载的配置
+    // 2. 路由路径 /merchant/{id}/ 格式
+    const pathMatch = window.location.pathname.match(/\/merchant\/([^/]+)/);
+    if (pathMatch && pathMatch[1]) return pathMatch[1];
+
+    // 3. localStorage 存储（登录时保存）
+    const storedId = localStorage.getItem("merchantId");
+    if (storedId) return storedId;
+
+    // 4. 已加载的配置
     if (this.config?.merchantId) return this.config.merchantId;
 
-    // 3. 环境变量兜底
+    // 5. 环境变量兜底
     return this.defaultMerchantId;
   }
 

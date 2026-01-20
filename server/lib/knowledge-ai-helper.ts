@@ -20,6 +20,17 @@ interface StructuredKnowledge {
   weight: number;
 }
 
+/**
+ * 冲突/重复项报告
+ */
+export interface KnowledgeConflict {
+  type: "duplicate" | "overlap" | "outdated";
+  originalId: string;
+  originalTitle: string;
+  reason: string;
+  suggestion: string;
+}
+
 // 定义 API 响应的类型
 interface SiliconFlowResponse {
   choices?: Array<{
@@ -134,5 +145,75 @@ ${rawText}`;
     console.error("[Agent C AI助手] ❌ 整理失败:", error);
     // 抛出错误而不是静默处理，保持函数签名的一致性
     throw error;
+  }
+}
+
+/**
+ * AI 智能体检：检测知识库中的语义重复和冲突
+ */
+export async function detectKnowledgeConflicts(
+  newItem: { title: string; content: string },
+  existingItems: Array<{ id: string; name: string; content: string }>
+): Promise<KnowledgeConflict[]> {
+  const apiKey = process.env.SILICONFLOW_API_KEY || "";
+  if (!apiKey || existingItems.length === 0) return [];
+
+  const systemPrompt = `你是一个知识库审计专家。
+你的任务是对比“新知识”与“现有知识库”，找出语义重复或内容冲突的条目。
+
+返回JSON格式：
+{
+  "conflicts": [
+    {
+      "type": "duplicate" (语义完全重复) | "overlap" (部分重叠/包含) | "conflict" (内容矛盾),
+      "originalId": "冲突条目的ID",
+      "originalTitle": "冲突条目的标题",
+      "reason": "为什么认为冲突",
+      "suggestion": "建议操作：合并/删除新项/更新旧项"
+    }
+  ]
+}`;
+
+  // 为了节省Token，只取前20个最相关的现有标题做初步对比
+  const context = existingItems
+    .slice(0, 30)
+    .map(item => `ID: ${item.id}, 标题: ${item.name}`)
+    .join("\n");
+
+  const userPrompt = `新条目标题：${newItem.title}
+新条目内容：${newItem.content}
+
+现有知识列表：
+${context}
+
+请检查是否存在冲突？如果没有冲突，返回 {"conflicts": []}`;
+
+  try {
+    const response = await fetch("https://api.siliconflow.cn/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "Qwen/Qwen2.5-7B-Instruct",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        temperature: 0.1,
+        response_format: { type: "json_object" },
+      }),
+    });
+
+    const data = (await response.json()) as SiliconFlowResponse;
+    const content = data.choices?.[0]?.message?.content;
+    if (!content) return [];
+
+    const result = JSON.parse(content);
+    return result.conflicts || [];
+  } catch (error) {
+    console.error("[Agent C AI助手] 冲突检测失败:", error);
+    return [];
   }
 }

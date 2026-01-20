@@ -35,6 +35,7 @@ export function HotQuestionsPage() {
     question: "",
     keywords: "",
     answer: "",
+    fromMissing: false,
   });
 
   const merchantId = "dongli";
@@ -79,17 +80,37 @@ export function HotQuestionsPage() {
           question: formData.question,
           keywords: formData.keywords.split(",").map(k => k.trim()),
           answer: formData.answer,
-          source: "manual",
+          source: formData.fromMissing ? "from_missing" : "manual",
         }),
       });
 
       if (res.ok) {
+        // 如果是从报缺转录的，自动忽略该报缺
+        if (formData.fromMissing) {
+          await handleIgnoreMissing(formData.question);
+        }
+
         setShowAddForm(false);
-        setFormData({ question: "", keywords: "", answer: "" });
+        setFormData({ question: "", keywords: "", answer: "", fromMissing: false });
         loadHotQuestions();
       }
     } catch (error) {
       console.error("添加热门问题失败:", error);
+    }
+  };
+
+  const handleIgnoreMissing = async (question: string) => {
+    try {
+      const res = await fetch(`/api/merchant/${merchantId}/missing-questions/ignore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question }),
+      });
+      if (res.ok) {
+        loadMissingQuestions();
+      }
+    } catch (error) {
+      console.error("忽略失败:", error);
     }
   };
 
@@ -98,6 +119,7 @@ export function HotQuestionsPage() {
       question: missing.question,
       keywords: missing.question,
       answer: "",
+      fromMissing: true,
     });
     setShowAddForm(true);
   };
@@ -163,9 +185,18 @@ export function HotQuestionsPage() {
                       {new Date(missing.lastSeenAt).toLocaleString()}
                     </p>
                   </div>
-                  <Button size="sm" onClick={() => handleAddFromMissing(missing)}>
-                    ➕ 添加到热门问题
-                  </Button>
+                  <div className="flex gap-2 ml-4">
+                    <Button size="sm" onClick={() => handleAddFromMissing(missing)}>
+                      ➕ 转热门
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleIgnoreMissing(missing.question)}
+                    >
+                      🗑️ 忽略
+                    </Button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -211,7 +242,7 @@ export function HotQuestionsPage() {
                 variant="outline"
                 onClick={() => {
                   setShowAddForm(false);
-                  setFormData({ question: "", keywords: "", answer: "" });
+                  setFormData({ question: "", keywords: "", answer: "", fromMissing: false });
                 }}
               >
                 ❌ 取消
@@ -274,6 +305,7 @@ export function HotQuestionsPage() {
                             question: hot.question,
                             keywords: hot.keywords.join(", "),
                             answer: hot.answer,
+                            fromMissing: false,
                           });
                           setShowAddForm(true);
                         }}

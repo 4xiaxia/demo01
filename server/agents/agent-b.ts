@@ -16,6 +16,7 @@
 import { anpBus } from "../bus";
 import { contextPool } from "../context-pool";
 import { configManager } from "../config-manager";
+import { HotQuestionService } from "../services/hot-question-service";
 import type { Message } from "../types";
 
 interface AgentBMessageData {
@@ -27,16 +28,6 @@ interface AgentBMessageData {
   source?: string;
   costMs?: number;
   query?: string;
-}
-
-// 配置相关的接口定义
-interface HotQuestionsDataSourceConfig {
-  hotQuestions?: string;
-}
-
-interface CacheConfig {
-  enabled?: boolean;
-  ttl?: number;
 }
 
 // 等待C回复的请求
@@ -51,22 +42,6 @@ class AgentB {
   private C_TIMEOUT = 3000; // C查询超时时间
   private pendingRequests: Map<string, PendingRequest> = new Map();
   private processingInterval: NodeJS.Timeout | null = null;
-
-  // 热门问题缓存（内存缓存，避免每次读文件）
-  private hotQuestionsCache = new Map<
-    string,
-    {
-      data: Array<{
-        id: string;
-        question: string;
-        keywords: string[];
-        answer: string;
-        enabled: boolean;
-      }>;
-      timestamp: number;
-    }
-  >();
-  private CACHE_TTL = 5 * 60 * 1000; // 5分钟缓存
 
   constructor() {
     this.setupListeners();
@@ -149,8 +124,8 @@ class AgentB {
       console.log(`[${this.name}] 🔥 商户热门问题命中: ${hotAnswer.id}`);
       await this.replyUser(msg, hotAnswer.answer, "hot_question", Date.now() - startTime);
 
-      // 异步更新命中次数（不阻塞回复）
-      this.incrementHotQuestionHit(merchantId, hotAnswer.id).catch(err => {
+      // ⚡ 关联影响检查：使用 HotQuestionService 异步更新命中次数，不影响主流程响应
+      HotQuestionService.incrementHit(merchantId, hotAnswer.id).catch(err => {
         console.error(`[${this.name}] 更新热门问题命中次数失败:`, err);
       });
 
@@ -238,35 +213,43 @@ class AgentB {
    */
   private async askAI(query: string): Promise<string> {
     try {
-      // 调用服务端/api/chat
+      const { callSiliconFlowChat, callZhipuChat } = await import("../lib/api-caller");
       const config = configManager.getConfig();
       const systemPrompt = config?.prompts?.system || "你是智能导游助手";
 
-      const response = await fetch("http://localhost:3000/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: [
+      // 优先使用SiliconFlow (免费)
+      const siliconflowKey = process.env.SILICONFLOW_API_KEY;
+      if (siliconflowKey) {
+        const result = await callSiliconFlowChat(
+          [
             { role: "system", content: systemPrompt },
             { role: "user", content: query },
           ],
-        }),
-      });
+          siliconflowKey
+        );
 
-      if (!response.ok) {
-        throw new Error("AI API failed");
+        if (result.success && result.data?.content) {
+          return result.data.content;
+        }
       }
 
-      interface AIResponse {
-        choices?: {
-          message?: {
-            content?: string;
-          };
-        }[];
+      // 备选: 智谱
+      const zhipuKey = process.env.ZHIPU_API_KEY || config?.api?.apiKey;
+      if (zhipuKey) {
+        const result = await callZhipuChat(
+          [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: query },
+          ],
+          zhipuKey
+        );
+
+        if (result.success && result.data?.content) {
+          return result.data.content;
+        }
       }
 
-      const data = (await response.json()) as AIResponse;
-      return data.choices?.[0]?.message?.content || "抱歉，我暂时无法回答这个问题。";
+      return "抱歉，我暂时无法回答这个问题。";
     } catch (error) {
       console.error(`[${this.name}] AI调用失败`, error);
       const fallback =
@@ -289,12 +272,9 @@ class AgentB {
     try {
       const config = configManager.getConfig();
       
-      const configDataSource = config?.dataSource as HotQuestionsDataSourceConfig | undefined;
-      const configCache = config?.cache as CacheConfig | undefined;
-
-      const dataSource = configDataSource?.hotQuestions || "local";
-      const cacheEnabled = configCache?.enabled !== false;
-      const cacheTTL = configCache?.ttl || 300; // 默认5分钟
+      const dataSource = config?.dataSource?.hotQuestions || "local";
+      const cacheEnabled = config?.cache?.enabled !== false;
+      const cacheTTL = config?.cache?.ttl || 300; // 默认5分钟
 
       // 1. 检查Dragonfly缓存 (如果启用)
       if (cacheEnabled) {
@@ -385,7 +365,7 @@ class AgentB {
   }
 
   /**
-   * 从本地文件加载热门问题
+   * 从本地文件加载热门问题 (解构后调用服务层)
    */
   private async loadHotQuestionsFromLocal(merchantId: string): Promise<
     Array<{
@@ -397,41 +377,17 @@ class AgentB {
     }>
   > {
     try {
-      console.log(`[${this.name}] 📂 从本地文件加载热门问题: ${merchantId}`);
-
-      const fs = await import("fs/promises");
-      const path = await import("path");
-
-      const hotQuestionsPath = path.join(
-        process.cwd(),
-        "server",
-        "merchant",
-        merchantId,
-        "hot-questions.json"
-      );
-
-      const content = await fs.readFile(hotQuestionsPath, "utf-8");
-      const data = JSON.parse(content) as {
-        merchantId: string;
-        hotQuestions: Array<{
-          id: string;
-          question: string;
-          keywords: string[];
-          answer: string;
-          enabled: boolean;
-        }>;
-      };
-
-      console.log(`[${this.name}] ✅ 本地热门问题加载完成: ${data.hotQuestions.length}条`);
+      console.log(`[${this.name}] 📂 调用 HotQuestionService 加载热门问题: ${merchantId}`);
+      const data = await HotQuestionService.load(merchantId);
       return data.hotQuestions;
     } catch (error) {
-      console.error(`[${this.name}] 本地文件加载失败:`, error);
+      console.error(`[${this.name}] 加载热门问题失败:`, error);
       return [];
     }
   }
 
   /**
-   * 匹配热门问题（提取为独立方法）
+   * 匹配热门问题（保持不变，运行时性能关键点）
    */
   private matchHotQuestion(
     hotQuestions: Array<{
@@ -465,57 +421,24 @@ class AgentB {
 
   /**
    * 手动刷新热门问题缓存（供API调用）
+   * 真正清除 Redis/Dragonfly 中的缓存
    */
-  public refreshHotQuestionsCache(merchantId: string) {
-    this.hotQuestionsCache.delete(merchantId);
-    console.log(`[${this.name}] 🔄 已清除 ${merchantId} 的热门问题缓存`);
+  public async refreshHotQuestionsCache(merchantId: string) {
+    const redis = contextPool.getRedisClient();
+    if (redis) {
+      const cacheKey = `hot:${merchantId}`;
+      await redis.del(cacheKey);
+      console.log(`[${this.name}] 🔄 已清除 Dragonfly 中的 ${merchantId} 热门问题缓存`);
+    } else {
+      console.warn(`[${this.name}] ⚠️ Redis未连接，无需清除缓存`);
+    }
   }
 
   /**
-   * 增加热门问题命中次数
-   *
-   * 异步执行，不阻塞主流程
+   * 增加热门问题命中次数 (已解构到 HotQuestionService)
    */
   private async incrementHotQuestionHit(merchantId: string, hotId: string): Promise<void> {
-    try {
-      const fs = await import("fs/promises");
-      const path = await import("path");
-
-      const hotQuestionsPath = path.join(
-        process.cwd(),
-        "server",
-        "merchant",
-        merchantId,
-        "hot-questions.json"
-      );
-
-      const content = await fs.readFile(hotQuestionsPath, "utf-8");
-      const data = JSON.parse(content) as {
-        merchantId: string;
-        hotQuestions: Array<{
-          id: string;
-          hitCount: number;
-          [key: string]: unknown;
-        }>;
-        updatedAt: number;
-        version: number;
-      };
-
-      // 找到对应的热门问题并增加命中次数
-      const hot = data.hotQuestions.find(h => h.id === hotId);
-      if (hot) {
-        hot.hitCount = (hot.hitCount || 0) + 1;
-        data.updatedAt = Date.now();
-
-        // 写回文件
-        await fs.writeFile(hotQuestionsPath, JSON.stringify(data, null, 2), "utf-8");
-
-        console.log(`[${this.name}] 📊 热门问题命中次数 +1: ${hotId} (总计: ${hot.hitCount})`);
-      }
-    } catch (error) {
-      // 静默失败，不影响主流程
-      console.error(`[${this.name}] 更新命中次数失败:`, error);
-    }
+    return HotQuestionService.incrementHit(merchantId, hotId);
   }
 
   /**

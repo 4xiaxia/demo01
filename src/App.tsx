@@ -27,9 +27,10 @@ function App() {
         {/* 登录页 */}
         <Route path="/login" element={<LoginPage />} />
 
-        {/* 后台: 管理系统 (带鉴权) */}
+        {/* 后台: 商家管理系统 (带鉴权，按商家编码隔离) */}
+        {/* 访问格式: /merchant/dongli, /merchant/xicun 等 */}
         <Route
-          path="/admin"
+          path="/merchant/:merchantId"
           element={
             <RequireAuth>
               <AdminLayout />

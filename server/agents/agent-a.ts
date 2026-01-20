@@ -14,7 +14,8 @@
 import { createMessage } from "../types";
 import { anpBus } from "../bus";
 import { contextPool } from "../context-pool";
-import { configManager } from "../config-manager";
+import { speechToText as unifiedSpeechToText } from "../services/api-service";
+import { IntentRules, RefinePatterns } from "../config/intent-rules";
 
 interface AgentAOptions {
   asrProvider?: string;
@@ -166,173 +167,63 @@ class AgentA {
   }
 
   /**
-   * 语音转文字
+   * 语音转文字 - 使用统一API服务
    */
   private async speechToText(audioBuffer: Buffer): Promise<string> {
-    const config = configManager.getConfig();
-    const apiKey = config?.api?.apiKey;
+    console.log(`[A哥] 🎤 speechToText 开始, audioSize=${audioBuffer.length}bytes`);
 
-    if (!apiKey) {
-      throw new Error("ASR API key not configured");
+    const result = await unifiedSpeechToText(audioBuffer);
+
+    if (!result.success) {
+      console.error(`[A哥] ❌ ASR失败:`, result.error);
+      throw new Error(result.error || "ASR failed");
     }
 
-    // 转换buffer为base64
-    const base64 = audioBuffer.toString("base64");
-
-    try {
-      // 使用配置的ASR提供商
-      if (this.asrProvider === "zhipu") {
-        const response = await fetch("https://open.bigmodel.cn/api/paas/v4/audio/transcriptions", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            file: base64,
-            model: "whisper-medium",
-          }),
-        });
-
-        if (!response.ok) {
-          throw new Error(`ASR request failed: ${response.statusText}`);
-        }
-
-        const data = (await response.json()) as unknown;
-
-        // 验证响应数据结构后再访问text属性
-        if (data && typeof data === "object" && "text" in data) {
-          return typeof data.text === "string" ? data.text : "";
-        }
-        return "";
-      } else {
-        // 其他ASR提供商的实现
-        throw new Error(`Unsupported ASR provider: ${this.asrProvider}`);
-      }
-    } catch (error) {
-      console.error("ASR failed:", error);
-      throw error;
-    }
+    const text = result.data?.text || "";
+    console.log(`[A哥] ✅ ASR识别成功 [${result.provider}]: "${text}"`);
+    return text;
   }
 
   /**
    * 意图分类
+   * 
+   * 重构说明：已将硬编码的关键词迁移至 config/intent-rules.ts
+   * 这样可以方便非技术人员通过配置文件调整识别规则，而无需修改核心代码
    */
   private classifyIntent(text: string): string {
     const lowerText = text.toLowerCase();
 
-    // 闲聊检测
-    const chitchatPatterns = [
-      /^(你好|hi|hello|嗨)/i,
-      /^(在吗|在不在)/i,
-      /今天.*天气/,
-      /聊天/,
-      /闲聊/,
-      /^ok/,
-      /^嗯$/,
-      /^啊$/,
-      /^哦$/,
-      /^嗯.*啊/,
-      /随便聊聊/,
-      /你好.*助手/,
-      /您好/,
-      /早上好/,
-      /下午好/,
-      /晚上好/,
-      /中午好/,
-    ];
-
-    if (chitchatPatterns.some(pattern => pattern.test(lowerText))) {
+    // 1. 闲聊检测 - 支持正则和字符串混合匹配
+    if (
+      IntentRules.CHITCHAT.some(pattern =>
+        pattern instanceof RegExp ? pattern.test(lowerText) : lowerText.includes(String(pattern))
+      )
+    ) {
       return "CHITCHAT";
     }
 
-    // 价格查询
-    const priceKeywords = [
-      "多少钱",
-      "价格",
-      "收费",
-      "费用",
-      "票",
-      "门票",
-      "票价",
-      "优惠",
-      "打折",
-      "折扣",
-    ];
-    if (priceKeywords.some(keyword => lowerText.includes(keyword))) {
+    // 2. 价格查询
+    if (IntentRules.PRICE_QUERY.some(keyword => lowerText.includes(String(keyword)))) {
       return "PRICE_QUERY";
     }
 
-    // 位置查询
-    const locationKeywords = [
-      "在哪",
-      "位置",
-      "地址",
-      "怎么去",
-      "路线",
-      "交通",
-      "导航",
-      "方向",
-      "地方",
-      "哪里",
-    ];
-    if (locationKeywords.some(keyword => lowerText.includes(keyword))) {
+    // 3. 位置查询
+    if (IntentRules.LOCATION_QUERY.some(keyword => lowerText.includes(String(keyword)))) {
       return "LOCATION_QUERY";
     }
 
-    // 时间查询
-    const timeKeywords = [
-      "什么时候",
-      "时间",
-      "几点",
-      "几点钟",
-      "营业",
-      "开放",
-      "关闭",
-      "截止",
-      "开始",
-      "结束",
-      "多久",
-      "时期",
-      "季节",
-    ];
-    if (timeKeywords.some(keyword => lowerText.includes(keyword))) {
+    // 4. 时间查询
+    if (IntentRules.TIME_QUERY.some(keyword => lowerText.includes(String(keyword)))) {
       return "TIME_QUERY";
     }
 
-    // 设施查询
-    const facilityKeywords = [
-      "厕所",
-      "卫生间",
-      "洗手间",
-      "餐厅",
-      "食堂",
-      "商店",
-      "超市",
-      "医务室",
-      "休息",
-      "座椅",
-      "充电桩",
-      "停车场",
-    ];
-    if (facilityKeywords.some(keyword => lowerText.includes(keyword))) {
+    // 5. 设施查询
+    if (IntentRules.FACILITY_QUERY.some(keyword => lowerText.includes(String(keyword)))) {
       return "FACILITY_QUERY";
     }
 
-    // 活动查询
-    const eventKeywords = [
-      "活动",
-      "表演",
-      "演出",
-      "节目",
-      "特色",
-      "节日",
-      "庆典",
-      "展览",
-      "展会",
-      "比赛",
-    ];
-    if (eventKeywords.some(keyword => lowerText.includes(keyword))) {
+    // 6. 活动查询
+    if (IntentRules.EVENT_QUERY.some(keyword => lowerText.includes(String(keyword)))) {
       return "EVENT_QUERY";
     }
 
@@ -344,40 +235,15 @@ class AgentA {
    * 问题精简
    */
   private refineQuestion(text: string, intent: string): string {
-    // 使用块级作用域解决case声明问题
-    if (intent === "PRICE_QUERY") {
-      const priceMatch = text.match(/(多少钱|价格|收费|费用|票|门票|票价|优惠|打折|折扣)/);
-      if (priceMatch) {
-        const keyword = priceMatch[0];
-        const before = text.substring(0, priceMatch.index!).split(" ").slice(-3).join(" ");
+    const pattern = RefinePatterns[intent as keyof typeof RefinePatterns];
+
+    if (pattern) {
+      const match = text.match(pattern);
+      if (match) {
+        const keyword = match[0];
+        const before = text.substring(0, match.index!).split(" ").slice(-3).join(" ");
         const after = text
-          .substring(priceMatch.index! + keyword.length)
-          .split(" ")
-          .slice(0, 3)
-          .join(" ");
-        return `${before}${keyword}${after}`.trim();
-      }
-    } else if (intent === "LOCATION_QUERY") {
-      const locationMatch = text.match(/(在哪|位置|地址|怎么去|路线|交通|导航|方向|地方|哪里)/);
-      if (locationMatch) {
-        const keyword = locationMatch[0];
-        const before = text.substring(0, locationMatch.index!).split(" ").slice(-3).join(" ");
-        const after = text
-          .substring(locationMatch.index! + keyword.length)
-          .split(" ")
-          .slice(0, 3)
-          .join(" ");
-        return `${before}${keyword}${after}`.trim();
-      }
-    } else if (intent === "TIME_QUERY") {
-      const timeMatch = text.match(
-        /(什么时候|时间|几点|几点钟|营业|开放|关闭|截止|开始|结束|多久|时期|季节)/
-      );
-      if (timeMatch) {
-        const keyword = timeMatch[0];
-        const before = text.substring(0, timeMatch.index!).split(" ").slice(-3).join(" ");
-        const after = text
-          .substring(timeMatch.index! + keyword.length)
+          .substring(match.index! + keyword.length)
           .split(" ")
           .slice(0, 3)
           .join(" ");

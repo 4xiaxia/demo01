@@ -15,9 +15,9 @@
 import { anpBus } from "../bus";
 import { contextPool } from "../context-pool";
 import { configManager } from "../config-manager";
+import { getKnowledgePath } from "../config/paths";
 import type { Message } from "../types";
 import fs from "fs/promises";
-import path from "path";
 
 interface KnowledgeItem {
   id: string;
@@ -38,7 +38,7 @@ class AgentC {
   private name = "C";
   private items: KnowledgeItem[] = [];
   private isReady = false;
-  private dataSource: "local" | "remote" = "local";
+  private dataSource: "local" | "mongodb" = "local";
   private processingInterval: NodeJS.Timeout | null = null;
 
   constructor() {
@@ -51,9 +51,9 @@ class AgentC {
    */
   async init(merchantId: string = "dongli") {
     const config = configManager.getConfig();
-    this.dataSource = config?.dataSource || "local";
+    this.dataSource = config?.dataSource?.knowledge || "local";
 
-    if (this.dataSource === "remote") {
+    if (this.dataSource === "mongodb") {
       await this.initFromRemote(merchantId);
     } else {
       await this.initFromLocal(merchantId);
@@ -65,13 +65,7 @@ class AgentC {
    */
   private async initFromLocal(merchantId: string) {
     try {
-      const knowledgePath = path.join(
-        process.cwd(),
-        "public",
-        "data",
-        merchantId,
-        "knowledge.json"
-      );
+      const knowledgePath = getKnowledgePath(merchantId);
       console.log(`[${this.name}] 📂 从本地加载: ${knowledgePath}`);
 
       const content = await fs.readFile(knowledgePath, "utf-8");
@@ -127,8 +121,21 @@ class AgentC {
         enabled?: boolean;
         weight?: number;
       }>;
+      knowledge?: Array<{
+        id?: unknown;
+        name?: unknown;
+        content?: unknown;
+        keywords?: unknown;
+        category?: unknown;
+        enabled?: boolean;
+        weight?: number;
+      }>;
     }
-    const items = ((data as RawKnowledgeData).items || []).map(item => ({
+    // ✅ 兼容两种字段名：items 或 knowledge
+    const rawData = data as RawKnowledgeData;
+    const rawItems = rawData.items || rawData.knowledge || [];
+    
+    const items = rawItems.map(item => ({
       id: String(item.id || ""),
       name: String(item.name || ""),
       content: String(item.content || ""),
@@ -140,6 +147,8 @@ class AgentC {
 
     this.items = items.filter((item: KnowledgeItem) => item.enabled);
     this.isReady = true;
+    
+    console.log(`[${this.name}] 📊 解析完成: ${this.items.length} 条有效知识 (来源字段: ${rawData.knowledge ? 'knowledge' : 'items'})`);
   }
 
   /**
@@ -402,52 +411,29 @@ ${candidates.map(c => `${c.index}. ${c.title}: ${c.content}`).join("\n")}
 
 请返回最佳答案的index（只返回数字）：`;
 
-      const response = await fetch("https://api.siliconflow.cn/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model: "Qwen/Qwen2.5-7B-Instruct",
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt },
-          ],
-          temperature: 0.1, // 低温度，保证稳定
-          max_tokens: 10,
-        }),
-      });
+      // 使用统一API调用工具
+      const { callSiliconFlowChat } = await import("../lib/api-caller");
+      const result = await callSiliconFlowChat(
+        [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        apiKey,
+        "Qwen/Qwen2.5-7B-Instruct"
+      );
 
-      if (!response.ok) {
-        throw new Error(`AI API Error: ${response.status}`);
+      if (!result.success || !result.data) {
+        throw new Error(`AI API Error: ${result.error}`);
       }
 
-      const data = await response.json();
-      
-      // 类型检查以避免ts(18046)错误
-      if (
-        typeof data === 'object' && 
-        data !== null && 
-        'choices' in data &&
-        Array.isArray(data.choices) && 
-        data.choices.length > 0 &&
-        typeof data.choices[0] === 'object' && 
-        data.choices[0] !== null &&
-        'message' in data.choices[0] &&
-        typeof data.choices[0].message === 'object' &&
-        data.choices[0].message !== null &&
-        'content' in data.choices[0].message
-      ) {
-        const aiChoice = (data.choices[0].message as { content: unknown }).content;
-        const selectedIndex = parseInt(typeof aiChoice === 'string' ? aiChoice.trim() : '0', 10);
+      const aiChoice = result.data.content;
+      const selectedIndex = parseInt(typeof aiChoice === 'string' ? aiChoice.trim() : '0', 10);
 
-        if (selectedIndex >= 0 && selectedIndex < results.length) {
-          console.log(
-            `[${this.name}] 🎯 AI选择: ${results[selectedIndex].item.name} (index: ${selectedIndex})`
-          );
-          return results[selectedIndex];
-        }
+      if (selectedIndex >= 0 && selectedIndex < results.length) {
+        console.log(
+          `[${this.name}] 🎯 AI选择: ${results[selectedIndex].item.name} (index: ${selectedIndex})`
+        );
+        return results[selectedIndex];
       }
 
       // AI返回无效，降级

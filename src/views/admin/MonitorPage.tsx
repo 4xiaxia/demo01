@@ -3,6 +3,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { useMerchantId } from "@/hooks/useMerchantId";
+import { Store } from "lucide-react";
 
 interface AgentStatus {
   name: string;
@@ -31,12 +33,16 @@ interface DialogLog {
 }
 
 export default function MonitorPage() {
+  // 获取当前商家编码
+  const merchantId = useMerchantId();
+
   const [agentHealth, setAgentHealth] = useState<AgentStatus[]>([]);
   const [dialogStats, setDialogStats] = useState({
     total: 0,
     voice: 0,
     text: 0,
     cacheHits: 0,
+    cacheHitRate: 0,
   });
   const [missingQuestions, setMissingQuestions] = useState<MissingQuestion[]>([]);
   const [realtimeLogs, setRealtimeLogs] = useState<DialogLog[]>([]);
@@ -63,10 +69,11 @@ export default function MonitorPage() {
     }
   }, []);
 
-  // 加载监控数据
+  // 加载监控数据（按商家隔离）
   const loadMonitorStats = useCallback(async () => {
     try {
-      const res = await fetch("/api/monitor/stats");
+      // 使用商家编码获取该商家的统计数据
+      const res = await fetch(`/api/monitor/stats?merchantId=${merchantId}`);
       const data = await res.json();
 
       if (data.success) {
@@ -76,6 +83,7 @@ export default function MonitorPage() {
           voice: data.data.dailyStats.voiceDialogs,
           text: data.data.dailyStats.textDialogs,
           cacheHits: data.data.dailyStats.cacheHits,
+          cacheHitRate: data.data.dailyStats.cacheHitRate || 0,
         });
         setMissingQuestions(data.data.missingQuestions);
       }
@@ -85,12 +93,13 @@ export default function MonitorPage() {
       console.error("加载监控数据失败:", error);
       setLoading(false);
     }
-  }, []);
+  }, [merchantId]);
 
-  // 加载实时日志
+  // 加载实时日志（按商家隔离）
   const loadRealtimeLogs = useCallback(async () => {
     try {
-      const res = await fetch("/api/monitor/logs?merchantId=dongli&limit=10");
+      // 使用当前商家编码
+      const res = await fetch(`/api/monitor/logs?merchantId=${merchantId}&limit=10`);
       const data = await res.json();
 
       if (data.success) {
@@ -99,7 +108,7 @@ export default function MonitorPage() {
     } catch (error) {
       console.error("加载实时日志失败:", error);
     }
-  }, []);
+  }, [merchantId]);
 
   // TraceId查询
   const handleTraceSearch = async () => {
@@ -144,8 +153,16 @@ export default function MonitorPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">📈 监控面板</h1>
-        <p className="text-gray-500 mt-2">实时监控系统运行状态</p>
+        <div className="flex items-center gap-3">
+          <h1 className="text-3xl font-bold">📈 监控面板</h1>
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 dark:bg-blue-900/20 rounded-full">
+            <Store size={14} className="text-blue-500" />
+            <span className="text-sm font-medium text-blue-600 dark:text-blue-400">
+              {merchantId}
+            </span>
+          </div>
+        </div>
+        <p className="text-gray-500 mt-2">实时监控 {merchantId} 商家的运行状态</p>
       </div>
 
       {/* 系统状态 */}
@@ -261,14 +278,14 @@ export default function MonitorPage() {
             <p className="text-gray-500">暂无日志记录，开始对话后将在此显示</p>
           ) : (
             <div className="space-y-3">
-              {realtimeLogs.map(log => (
-                <div key={log.traceId} className="border-b pb-3">
+              {realtimeLogs.map((log, idx) => (
+                <div key={log.traceId || `log-${log.timestamp}-${idx}`} className="border-b pb-3">
                   <div className="flex items-center gap-2 text-sm">
                     <span className="text-gray-500">
                       {new Date(log.timestamp).toLocaleTimeString()}
                     </span>
                     <span className="text-blue-600 font-mono text-xs">
-                      {log.traceId.slice(-12)}
+                      {log.traceId ? log.traceId.slice(-12) : "(无ID)"}
                     </span>
                     <span>{log.inputType === "voice" ? "🎤" : "⌨️"}</span>
                     <span className="font-medium">"{log.question}"</span>
@@ -279,10 +296,10 @@ export default function MonitorPage() {
                       {log.source === "user_cache"
                         ? "缓存命中"
                         : log.source === "hot_question"
-                        ? "热门问题"
-                        : log.source === "knowledge_base"
-                        ? "C检索"
-                        : "AI兜底"}
+                          ? "热门问题"
+                          : log.source === "knowledge_base"
+                            ? "C检索"
+                            : "AI兜底"}
                       {log.found ? " ✅ 完成" : " ⚠️ 报缺"}
                     </div>
                   )}
@@ -356,8 +373,11 @@ export default function MonitorPage() {
           ) : (
             <div className="space-y-2">
               {missingQuestions.map((item, idx) => (
-                <div key={idx} className="flex items-center justify-between p-3 border rounded">
-                  <span>"{item.question}"</span>
+                <div
+                  key={`${item.question || "empty"}-${idx}`}
+                  className="flex items-center justify-between p-3 border rounded"
+                >
+                  <span>"{item.question || "(空问题)"}"</span>
                   <Badge variant="destructive">被问{item.count}次</Badge>
                 </div>
               ))}
