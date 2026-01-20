@@ -8,19 +8,8 @@
  */
 
 import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
-import fs from "fs/promises";
-import path from "path";
-
-interface KnowledgeItem {
-  id: string;
-  name: string;
-  content: string;
-  keywords: string[];
-  category: string;
-  enabled: boolean;
-  isHot?: boolean;
-  weight?: number;
-}
+import { KnowledgeService, KnowledgeItem } from "../services/knowledge-service";
+import { detectKnowledgeConflicts } from "../lib/knowledge-ai-helper";
 
 /**
  * 注册知识库管理路由
@@ -32,7 +21,7 @@ export async function registerKnowledgeRoutes(server: FastifyInstance) {
     async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
       try {
         const merchantId = req.params.id;
-        const knowledge = await loadKnowledge(merchantId);
+        const knowledge = await KnowledgeService.load(merchantId);
 
         reply.send({
           success: true,
@@ -57,7 +46,6 @@ export async function registerKnowledgeRoutes(server: FastifyInstance) {
     ) => {
       try {
         const merchantId = req.params.id;
-        // 兼容两种字段名: knowledge 或 items
         const body = req.body as { knowledge?: KnowledgeItem[]; items?: KnowledgeItem[] };
         const knowledge = body.knowledge || body.items;
 
@@ -65,11 +53,11 @@ export async function registerKnowledgeRoutes(server: FastifyInstance) {
           return reply.status(400).send({ error: "Invalid knowledge data" });
         }
 
-        await saveKnowledge(merchantId, knowledge);
+        const success = await KnowledgeService.save(merchantId, knowledge);
 
         reply.send({
-          success: true,
-          message: "知识库保存成功",
+          success,
+          message: success ? "知识库保存成功" : "保存失败",
         });
       } catch (error) {
         console.error("保存知识库失败:", error);
@@ -141,45 +129,37 @@ export async function registerKnowledgeRoutes(server: FastifyInstance) {
       }
     }
   );
-}
 
-/**
- * 加载知识库
- */
-async function loadKnowledge(merchantId: string): Promise<KnowledgeItem[]> {
-  const filePath = path.join(process.cwd(), "public", "data", merchantId, "knowledge.json");
+  // ===== 4. 冲突/重复性检查 =====
+  server.post(
+    "/api/merchant/:id/knowledge/check-conflicts",
+    async (
+      req: FastifyRequest<{
+        Params: { id: string };
+        Body: { newItem: { title: string; content: string } };
+      }>,
+      reply: FastifyReply
+    ) => {
+      try {
+        const merchantId = req.params.id;
+        const { newItem } = req.body;
 
-  try {
-    const content = await fs.readFile(filePath, "utf-8");
-    const data = JSON.parse(content);
-    return data.knowledge || [];
-  } catch (error) {
-    console.error("读取知识库失败:", error);
-    return [];
-  }
-}
+        // 加载现有知识库
+        const existingKnowledge = await KnowledgeService.load(merchantId);
 
-/**
- * 保存知识库
- */
-async function saveKnowledge(merchantId: string, knowledge: KnowledgeItem[]): Promise<void> {
-  const dirPath = path.join(process.cwd(), "public", "data", merchantId);
-  const filePath = path.join(dirPath, "knowledge.json");
+        // 调用AI进行检测
+        const conflicts = await detectKnowledgeConflicts(newItem, existingKnowledge);
 
-  // 确保目录存在
-  await fs.mkdir(dirPath, { recursive: true });
-
-  // 构建完整数据结构
-  const data = {
-    merchantId,
-    knowledge,
-    updatedAt: Date.now(),
-  };
-
-  // 写入文件
-  await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
-
-  console.log(`[KnowledgeAPI] ✅ 知识库已保存: ${merchantId}, 共${knowledge.length}条`);
+        reply.send({
+          success: true,
+          conflicts,
+        });
+      } catch (error) {
+        console.error("冲突检测失败:", error);
+        reply.status(500).send({ error: "Internal server error" });
+      }
+    }
+  );
 }
 
 /**

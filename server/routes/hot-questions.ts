@@ -10,16 +10,13 @@
  */
 
 import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
-import fs from "fs/promises";
-import path from "path";
-import type {
-  HotQuestion,
-  MerchantHotQuestions,
-  MissingQuestionRecord,
-} from "../types/hot-questions";
+import { HotQuestionService } from "../services/hot-question-service";
+import { MissingQuestionService } from "../services/missing-question-service";
+import { agentD } from "../agents/agent-d";
+import { HotQuestion, MissingQuestionRecord } from "../types/hot-questions";
 
 /**
- * 注册热门问题管理路由
+ * 注册热门问题管理路由 (已解构)
  */
 export async function registerHotQuestionsRoutes(server: FastifyInstance) {
   // ===== 1. 获取商户热门问题列表 =====
@@ -28,14 +25,9 @@ export async function registerHotQuestionsRoutes(server: FastifyInstance) {
     async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
       try {
         const merchantId = req.params.id;
-        const hotQuestions = await loadHotQuestions(merchantId);
-
-        reply.send({
-          success: true,
-          data: hotQuestions,
-        });
-      } catch (error) {
-        console.error("获取热门问题失败:", error);
+        const hotQuestions = await HotQuestionService.load(merchantId);
+        reply.send({ success: true, data: hotQuestions });
+      } catch {
         reply.status(500).send({ error: "Internal server error" });
       }
     }
@@ -47,66 +39,15 @@ export async function registerHotQuestionsRoutes(server: FastifyInstance) {
     async (
       req: FastifyRequest<{
         Params: { id: string };
-        Body: {
-          question: string;
-          keywords: string[];
-          answer: string;
-          source: "manual" | "from_missing";
-          originalMissingQuestion?: string;
-        };
+        Body: Partial<HotQuestion>;
       }>,
       reply: FastifyReply
     ) => {
       try {
         const merchantId = req.params.id;
-        const { question, keywords, answer, source, originalMissingQuestion } = req.body;
-
-        console.log(`[HotQuestions] 添加热门问题请求:`, {
-          merchantId,
-          question,
-          keywords,
-          answer,
-          source,
-        });
-
-        // 验证必填字段
-        if (!question || !keywords || !answer) {
-          console.log(`[HotQuestions] ❌ 缺少必填字段`);
-          return reply.status(400).send({ error: "Missing required fields" });
-        }
-
-        const hotQuestions = await loadHotQuestions(merchantId);
-
-        // 生成新ID
-        const newId = `hot_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-
-        const newHotQuestion: HotQuestion = {
-          id: newId,
-          question,
-          keywords,
-          answer,
-          hitCount: 0,
-          lastUpdated: new Date().toISOString(),
-          enabled: true,
-          createdAt: new Date().toISOString(),
-          source,
-          originalMissingQuestion,
-        };
-
-        hotQuestions.hotQuestions.push(newHotQuestion);
-        hotQuestions.updatedAt = Date.now();
-        hotQuestions.version++;
-
-        await saveHotQuestions(merchantId, hotQuestions);
-
-        console.log(`[HotQuestions] ✅ 热门问题添加成功: ${newId}`);
-
-        reply.send({
-          success: true,
-          data: newHotQuestion,
-        });
-      } catch (error) {
-        console.error("添加热门问题失败:", error);
+        const newHotQuestion = await HotQuestionService.add(merchantId, req.body);
+        reply.send({ success: true, data: newHotQuestion });
+      } catch {
         reply.status(500).send({ error: "Internal server error" });
       }
     }
@@ -125,33 +66,20 @@ export async function registerHotQuestionsRoutes(server: FastifyInstance) {
       try {
         const merchantId = req.params.id;
         const hotId = req.params.hotId;
-        const updates = req.body;
-
-        const hotQuestions = await loadHotQuestions(merchantId);
+        const hotQuestions = await HotQuestionService.load(merchantId);
         const index = hotQuestions.hotQuestions.findIndex(h => h.id === hotId);
 
-        if (index === -1) {
-          return reply.status(404).send({ error: "Hot question not found" });
-        }
+        if (index === -1) return reply.status(404).send({ error: "Not found" });
 
-        // 更新字段
         hotQuestions.hotQuestions[index] = {
           ...hotQuestions.hotQuestions[index],
-          ...updates,
+          ...req.body,
           lastUpdated: new Date().toISOString(),
         };
 
-        hotQuestions.updatedAt = Date.now();
-        hotQuestions.version++;
-
-        await saveHotQuestions(merchantId, hotQuestions);
-
-        reply.send({
-          success: true,
-          data: hotQuestions.hotQuestions[index],
-        });
-      } catch (error) {
-        console.error("更新热门问题失败:", error);
+        await HotQuestionService.save(merchantId, hotQuestions);
+        reply.send({ success: true, data: hotQuestions.hotQuestions[index] });
+      } catch {
         reply.status(500).send({ error: "Internal server error" });
       }
     }
@@ -164,124 +92,75 @@ export async function registerHotQuestionsRoutes(server: FastifyInstance) {
       try {
         const merchantId = req.params.id;
         const hotId = req.params.hotId;
-
-        const hotQuestions = await loadHotQuestions(merchantId);
-        const index = hotQuestions.hotQuestions.findIndex(h => h.id === hotId);
-
-        if (index === -1) {
-          return reply.status(404).send({ error: "Hot question not found" });
-        }
-
-        hotQuestions.hotQuestions.splice(index, 1);
-        hotQuestions.updatedAt = Date.now();
-        hotQuestions.version++;
-
-        await saveHotQuestions(merchantId, hotQuestions);
-
+        const hotQuestions = await HotQuestionService.load(merchantId);
+        hotQuestions.hotQuestions = hotQuestions.hotQuestions.filter(h => h.id !== hotId);
+        await HotQuestionService.save(merchantId, hotQuestions);
         reply.send({ success: true });
-      } catch (error) {
-        console.error("删除热门问题失败:", error);
+      } catch {
         reply.status(500).send({ error: "Internal server error" });
       }
     }
   );
 
-  // ===== 5. 获取报缺列表（来自Agent D）=====
+  // ===== 5. 获取报缺列表 (接入 MissingQuestionService) =====
   server.get(
     "/api/merchant/:id/missing-questions",
     async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
       try {
         const merchantId = req.params.id;
-
-        // TODO: 从Agent D获取报缺列表
-        // 当前返回模拟数据
-        const missingQuestions: MissingQuestionRecord[] = [
-          {
-            question: "门票多少钱",
-            count: 152,
-            firstSeenAt: "2026-01-10T10:00:00Z",
-            lastSeenAt: "2026-01-15T22:00:00Z",
+        // 获取该商家的报缺统计
+        const stats = MissingQuestionService.getStats(merchantId);
+        const missingQuestions: MissingQuestionRecord[] = Object.entries(
+          stats.missingQuestions
+        ).map(
+          ([question, d]: [
+            string,
+            { count: number; firstSeenAt: number; lastSeenAt: number; intentCategory?: string },
+          ]) => ({
+            question,
+            count: d.count,
+            firstSeenAt: new Date(d.firstSeenAt).toISOString(),
+            lastSeenAt: new Date(d.lastSeenAt).toISOString(),
             status: "pending",
             merchantId,
-            intentCategory: "PRICE_QUERY",
-          },
-          {
-            question: "怎么去",
-            count: 89,
-            firstSeenAt: "2026-01-12T14:00:00Z",
-            lastSeenAt: "2026-01-15T20:00:00Z",
-            status: "pending",
-            merchantId,
-            intentCategory: "LOCATION_QUERY",
-          },
-        ];
-
-        reply.send({
-          success: true,
-          data: missingQuestions,
-        });
-      } catch (error) {
-        console.error("获取报缺列表失败:", error);
+            intentCategory: d.intentCategory || "OTHER_QUERY",
+          })
+        );
+        reply.send({ success: true, data: missingQuestions });
+      } catch {
         reply.status(500).send({ error: "Internal server error" });
       }
     }
   );
 
-  // ===== 6. 增加热门问题命中次数 =====
+  // ===== 6. 忽略报缺问题 =====
   server.post(
-    "/api/merchant/:id/hot-questions/:hotId/hit",
-    async (req: FastifyRequest<{ Params: { id: string; hotId: string } }>, reply: FastifyReply) => {
+    "/api/merchant/:id/missing-questions/ignore",
+    async (
+      req: FastifyRequest<{ Params: { id: string }; Body: { question: string } }>,
+      reply: FastifyReply
+    ) => {
       try {
         const merchantId = req.params.id;
-        const hotId = req.params.hotId;
-
-        const hotQuestions = await loadHotQuestions(merchantId);
-        const index = hotQuestions.hotQuestions.findIndex(h => h.id === hotId);
-
-        if (index !== -1) {
-          hotQuestions.hotQuestions[index].hitCount++;
-          await saveHotQuestions(merchantId, hotQuestions);
-        }
-
+        // 传入 merchantId 和 question
+        agentD.ignoreMissingQuestion(merchantId, req.body.question);
         reply.send({ success: true });
-      } catch (error) {
-        console.error("更新命中次数失败:", error);
+      } catch {
         reply.status(500).send({ error: "Internal server error" });
       }
     }
   );
-}
 
-/**
- * 加载商户热门问题
- */
-async function loadHotQuestions(merchantId: string): Promise<MerchantHotQuestions> {
-  const filePath = path.join(process.cwd(), "server", "merchant", merchantId, "hot-questions.json");
-
-  try {
-    const content = await fs.readFile(filePath, "utf-8");
-    return JSON.parse(content);
-  } catch {
-    // 文件不存在，返回空列表
-    return {
-      merchantId,
-      hotQuestions: [],
-      updatedAt: Date.now(),
-      version: 1,
-    };
-  }
-}
-
-/**
- * 保存商户热门问题
- */
-async function saveHotQuestions(merchantId: string, data: MerchantHotQuestions): Promise<void> {
-  const dirPath = path.join(process.cwd(), "server", "merchant", merchantId);
-  const filePath = path.join(dirPath, "hot-questions.json");
-
-  // 确保目录存在
-  await fs.mkdir(dirPath, { recursive: true });
-
-  // 写入文件
-  await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
+  // ===== 7. 报缺自动聚类建议 (P2-12) =====
+  server.get(
+    "/api/merchant/:id/missing-questions/clusters",
+    async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      try {
+        const clusters = await MissingQuestionService.getClusteringSuggestions(req.params.id);
+        reply.send({ success: true, data: clusters });
+      } catch {
+        reply.status(500).send({ error: "Internal server error" });
+      }
+    }
+  );
 }

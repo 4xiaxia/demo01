@@ -19,6 +19,7 @@ import { Message } from "./types";
 import { registerHotQuestionsRoutes } from "./routes/hot-questions";
 import { registerMonitorRoutes } from "./routes/monitor";
 import { registerKnowledgeRoutes } from "./routes/knowledge";
+import { getPublicConfigPath, getServerConfigPath, getKnowledgePath } from "./config/paths";
 
 // ES模块中获取__dirname的替代方法
 const __filename = fileURLToPath(import.meta.url);
@@ -34,6 +35,28 @@ console.log("[Server] 所有Agents初始化完成");
 // 创建 Fastify 实例
 const server: FastifyInstance = fastify({
   logger: true,
+});
+
+// 全局错误处理
+// 职责：捕获全系统未处理的异常，防止服务端崩溃，并给用户提供友好的降级提示
+server.setErrorHandler((error, request, reply) => {
+  server.log.error(error);
+
+  // 使用类型保护或局部接口避开 any 检查
+  const err = error as { statusCode?: number; message: string; stack?: string };
+  const statusCode = err.statusCode || 500;
+  // 4xx 错误通常是业务逻辑或参数问题，5xx 则是服务器故障
+  const isClientError = statusCode >= 400 && statusCode < 500;
+
+  reply.status(statusCode).send({
+    success: false,
+    // 对外隐藏具体堆栈，仅在开发环境显示
+    error: isClientError ? err.message : "服务器正在思考，请稍后再试",
+    details: process.env.NODE_ENV === "development" ? err.stack : undefined,
+    traceId:
+      (request.body as Record<string, unknown>)?.traceId ||
+      (request.query as Record<string, unknown>)?.traceId,
+  });
 });
 
 // 监听 Bus 消息，暂存回复以便前端轮询
@@ -158,11 +181,13 @@ server.post("/api/process-input", async (req: FastifyRequest, reply: FastifyRepl
     }
 
     console.log(
-      `[Server] 收到请求: userId=${userId}, merchantId=${merchantId}, inputType=${inputType}`
+      `[Server] 收到请求: userId=${userId}, merchantId=${merchantId}, inputType=${inputType}, audioSize=${audioBuffer?.length || 0}bytes`
     );
 
     // 调用服务端 Agent A 处理输入
+    console.log(`[Server] 调用 AgentA.processInput...`);
     const result = await agentA.processInput(userId, sessionId, input, inputType, merchantId);
+    console.log(`[Server] AgentA 处理完成, traceId=${result?.traceId}`);
 
     // 返回处理结果
     reply.send(result);
@@ -171,6 +196,143 @@ server.post("/api/process-input", async (req: FastifyRequest, reply: FastifyRepl
     reply.status(500).send({ error: "Internal server error", details: String(error) });
   }
 });
+
+// ============ TTS 语音合成 API ============
+server.post(
+  "/api/tts",
+  async (
+    req: FastifyRequest<{ Body: { text: string; voice?: string; speed?: number } }>,
+    reply: FastifyReply
+  ) => {
+    try {
+      const { text, voice = "female" } = req.body;
+
+      if (!text) {
+        reply.status(400).send({ error: "Missing text parameter" });
+        return;
+      }
+
+      console.log(`[TTS] 合成请求: "${text.slice(0, 30)}..." voice=${voice}`);
+
+      // 使用统一API服务
+      const { textToSpeech } = await import("./services/api-service");
+      const result = await textToSpeech(text, voice as "male" | "female");
+
+      if (result.success && result.data) {
+        reply.send({
+          success: true,
+          audioBase64: result.data.audioBase64,
+          format: result.data.format,
+          provider: result.provider,
+        });
+      } else {
+        reply.status(500).send({ success: false, error: result.error || "TTS synthesis failed" });
+      }
+    } catch (error) {
+      console.error("[TTS] Error:", error);
+      reply.status(500).send({ error: "TTS error", details: String(error) });
+    }
+  }
+);
+
+// ============ ASR 语音识别 API ============
+server.post("/api/asr", async (req: FastifyRequest, reply: FastifyReply) => {
+  try {
+    console.log("[ASR] 收到识别请求");
+
+    // 解析 multipart/form-data
+    const parts = req.parts();
+    let audioBuffer: Buffer | null = null;
+
+    for await (const part of parts) {
+      if (part.type === "file" && part.fieldname === "file") {
+        // 处理音频文件
+        const chunks: Buffer[] = [];
+        for await (const chunk of part.file) {
+          chunks.push(chunk);
+        }
+        audioBuffer = Buffer.concat(chunks);
+        console.log(`[ASR] 接收音频文件: ${(audioBuffer.length / 1024).toFixed(1)}KB`);
+        break;
+      }
+    }
+
+    if (!audioBuffer) {
+      reply.status(400).send({ success: false, error: "Missing audio file" });
+      return;
+    }
+
+    // 调用智谱 ASR 服务
+    const { callZhipuASR } = await import("./services/asr/asr-zhipu");
+    const result = await callZhipuASR(audioBuffer);
+
+    if (result.success && result.data) {
+      console.log(`[ASR] ✅ 识别成功: "${result.data.text.slice(0, 50)}..."`);
+      reply.send({
+        success: true,
+        text: result.data.text,
+        provider: result.provider,
+        duration: result.duration,
+      });
+    } else {
+      console.error(`[ASR] ❌ 识别失败: ${result.error}`);
+      reply.status(500).send({
+        success: false,
+        error: result.error || "ASR recognition failed",
+      });
+    }
+  } catch (error) {
+    console.error("[ASR] Error:", error);
+    reply.status(500).send({
+      success: false,
+      error: "ASR error",
+      details: String(error),
+    });
+  }
+});
+
+// ============ 输入统计 API ============
+const inputStats: Record<string, { text: number; voice: number; lastUpdated: string }> = {};
+
+server.post(
+  "/api/stats/input",
+  async (
+    req: FastifyRequest<{ Body: { merchantId: string; inputType: "text" | "voice" } }>,
+    reply: FastifyReply
+  ) => {
+    try {
+      const { merchantId, inputType } = req.body;
+
+      if (!inputStats[merchantId]) {
+        inputStats[merchantId] = { text: 0, voice: 0, lastUpdated: new Date().toISOString() };
+      }
+
+      if (inputType === "text") {
+        inputStats[merchantId].text++;
+      } else if (inputType === "voice") {
+        inputStats[merchantId].voice++;
+      }
+      inputStats[merchantId].lastUpdated = new Date().toISOString();
+
+      console.log(
+        `[Stats] ${merchantId} 输入统计: text=${inputStats[merchantId].text}, voice=${inputStats[merchantId].voice}`
+      );
+      reply.send({ success: true, stats: inputStats[merchantId] });
+    } catch (error) {
+      console.error("[Stats] Error:", error);
+      reply.status(500).send({ error: "Stats error" });
+    }
+  }
+);
+
+server.get(
+  "/api/stats/input/:merchantId",
+  async (req: FastifyRequest<{ Params: { merchantId: string } }>, reply: FastifyReply) => {
+    const { merchantId } = req.params;
+    const stats = inputStats[merchantId] || { text: 0, voice: 0, lastUpdated: null };
+    reply.send({ success: true, stats });
+  }
+);
 
 // API 路由：获取商户配置
 server.get(
@@ -181,7 +343,7 @@ server.get(
       console.log(`[Server] 获取商户配置: ${merchantId}`);
 
       // 从public/data读取配置
-      const configPath = path.join(__dirname, "..", "public", "data", merchantId, "config.json");
+      const configPath = getPublicConfigPath(merchantId);
 
       try {
         const configData = await fs.readFile(configPath, "utf-8");
@@ -209,14 +371,7 @@ server.put(
       console.log(`[Server] 保存商户配置: ${merchantId}`);
 
       // 保存到本地文件
-      const configPath = path.join(
-        __dirname,
-        "..",
-        "server",
-        "merchant",
-        merchantId,
-        "config.json"
-      );
+      const configPath = getServerConfigPath(merchantId);
 
       try {
         // 确保目录存在
@@ -239,14 +394,22 @@ server.put(
           merchantId, // 确保merchantId正确
         };
 
-        // 写入文件
+        // 写入server/merchant目录(后端使用)
         await fs.writeFile(configPath, JSON.stringify(mergedConfig, null, 2), "utf-8");
+        console.log(`[Server] ✅ 后端配置已保存: ${configPath}`);
+
+        // 同步写入public/data目录(前端使用)
+        const publicConfigPath = getPublicConfigPath(merchantId);
+        const publicDir = path.dirname(publicConfigPath);
+        await fs.mkdir(publicDir, { recursive: true });
+        await fs.writeFile(publicConfigPath, JSON.stringify(mergedConfig, null, 2), "utf-8");
+        console.log(`[Server] ✅ 前端配置已同步: ${publicConfigPath}`);
 
         // 重新加载配置使其生效
-        await configManager.init();
+        await configManager.reloadConfig(merchantId);
 
-        console.log(`[Server] ✅ 配置已保存: ${merchantId}`);
-        reply.send({ success: true, message: "配置已保存并实时生效" });
+        console.log(`[Server] ✅ 配置已保存并同步: ${merchantId}`);
+        reply.send({ success: true, message: "配置已保存并实时生效(前后端同步)" });
       } catch (error) {
         console.error(`[Server] 保存配置失败:`, error);
         reply.status(500).send({ error: "保存配置失败" });
@@ -273,7 +436,7 @@ server.get(
         return reply.status(400).send({ error: "Missing query parameter" });
       }
 
-      const knowledgePath = path.join(__dirname, "merchant", merchantId, "knowledge.json");
+      const knowledgePath = getKnowledgePath(merchantId);
 
       try {
         const knowledgeData = await fs.readFile(knowledgePath, "utf-8");
@@ -308,10 +471,11 @@ server.get(
     reply: FastifyReply
   ) => {
     try {
-      // const { merchantId, userId, sessionId } = req.params; // unused
+      const { merchantId, userId, sessionId } = req.params;
 
-      // TODO: 实现从服务端context pool获取上下文
-      reply.send({ context: [], message: "Context pool not yet implemented in API route" });
+      // ✅ 从服务端 context pool 获取完整历史
+      const history = await contextPool.getFullHistory(merchantId, userId, sessionId);
+      reply.send({ success: true, context: history });
     } catch (error) {
       console.error("Error getting context:", error);
       reply.status(500).send({ error: "Internal server error" });
@@ -323,12 +487,19 @@ server.get(
 server.post(
   "/api/context/:merchantId/:userId/:sessionId",
   async (
-    req: FastifyRequest<{ Params: { merchantId: string; userId: string; sessionId: string } }>,
+    req: FastifyRequest<{
+      Params: { merchantId: string; userId: string; sessionId: string };
+      Body: { role: "user" | "assistant" | "system"; content: string; [key: string]: unknown };
+    }>,
     reply: FastifyReply
   ) => {
     try {
-      // TODO: 实现向服务端context pool添加上下文
-      reply.send({ success: true, message: "Context pool not yet implemented in API route" });
+      const { merchantId, userId, sessionId } = req.params;
+      const turn = req.body;
+
+      // ✅ 向服务端 context pool 添加上下文
+      await contextPool.addTurn(merchantId, userId, sessionId, turn);
+      reply.send({ success: true, message: "Context added successfully" });
     } catch (error) {
       console.error("Error adding context:", error);
       reply.status(500).send({ error: "Internal server error" });
@@ -387,10 +558,10 @@ server.post("/api/chat", async (req: FastifyRequest<{ Body: ChatBody }>, reply: 
 
     if (provider === "zhipu") {
       // 使用智谱 GLM-4-Flash (免费)
-      const apiKey = process.env.VITE_ZHIPU_API_KEY || "";
+      const apiKey = process.env.ZHIPU_API_KEY || "";
 
       if (!apiKey) {
-        console.warn("[Server] VITE_ZHIPU_API_KEY 未配置，使用兜底回复");
+        console.warn("[Server] ZHIPU_API_KEY 未配置，使用兜底回复");
         return reply.send({
           choices: [
             {
@@ -502,9 +673,20 @@ const start = async () => {
     await server.register(formBody);
     await server.register(multipart);
 
-    // 初始化数据库服务
+    // 初始化数据库服务（带超时保护）
     console.log("[Server] 初始化数据库连接...");
-    await databaseService.init();
+    try {
+      // 设置 5 秒超时，防止 MongoDB 连接卡死
+      await Promise.race([
+        databaseService.init(),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error("MongoDB 连接超时")), 5000)
+        )
+      ]);
+      console.log("[Server] ✅ 数据库连接成功");
+    } catch (error) {
+      console.warn("[Server] ⚠️ 数据库连接失败，降级为本地文件模式:", error);
+    }
 
     // 初始化配置管理器
     await configManager.init();

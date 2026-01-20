@@ -43,9 +43,9 @@ fastify.post("/api/chat", async (request, reply) => {
     model?: string;
   };
 
-  const API_KEY = process.env.ZHIPU_API_KEY || process.env.VITE_ZHIPU_API_KEY;
+  const API_KEY = process.env.ZHIPU_API_KEY || "";
   if (!API_KEY) {
-    return reply.status(500).send({ error: "API Key not configured" });
+    return reply.status(500).send({ error: "ZHIPU_API_KEY not configured" });
   }
 
   try {
@@ -68,7 +68,7 @@ fastify.post("/api/chat", async (request, reply) => {
 // ASR API
 fastify.post("/api/asr", async (request, reply) => {
   const { audio, format = "wav" } = request.body as { audio: string; format?: string };
-  const API_KEY = process.env.ZHIPU_API_KEY || process.env.VITE_ZHIPU_API_KEY;
+  const API_KEY = process.env.ZHIPU_API_KEY || "";
 
   if (!API_KEY) {
     return reply.status(500).send({ error: "API Key not configured" });
@@ -98,7 +98,7 @@ fastify.post("/api/asr", async (request, reply) => {
 // TTS API
 fastify.post("/api/tts", async (request, reply) => {
   const { text, voice = "alloy" } = request.body as { text: string; voice?: string };
-  const API_KEY = process.env.SILICONFLOW_API_KEY || process.env.VITE_SILICONFLOW_API_KEY;
+  const API_KEY = process.env.SILICONFLOW_API_KEY || "";
 
   if (!API_KEY) {
     return reply.status(500).send({ error: "TTS API Key not configured" });

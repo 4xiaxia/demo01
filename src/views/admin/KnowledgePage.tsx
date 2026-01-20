@@ -34,6 +34,14 @@ interface KnowledgeItem {
   weight?: number;
 }
 
+interface KnowledgeConflict {
+  type: "duplicate" | "overlap" | "conflict";
+  originalId: string;
+  originalTitle: string;
+  reason: string;
+  suggestion: string;
+}
+
 export const KnowledgePage = () => {
   const [items, setItems] = useState<KnowledgeItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -48,6 +56,9 @@ export const KnowledgePage = () => {
   const [aiRawText, setAiRawText] = useState("");
   const [aiProcessing, setAiProcessing] = useState(false);
   const [aiResult, setAiResult] = useState<KnowledgeItem | null>(null);
+  const [conflicts, setConflicts] = useState<KnowledgeConflict[]>([]);
+  const [checkingConflicts, setCheckingConflicts] = useState(false);
+  const [autoCheckConflicts, setAutoCheckConflicts] = useState(false);
 
   const merchantId = configManager.getMerchantId();
 
@@ -92,6 +103,7 @@ export const KnowledgePage = () => {
 
   // 添加条目
   const handleAdd = () => {
+    setConflicts([]); // 重置冲突状态
     setEditingItem({
       id: `k_${Date.now()}`,
       name: "",
@@ -264,6 +276,7 @@ export const KnowledgePage = () => {
 
     setAiProcessing(true);
     setAiResult(null);
+    setConflicts([]); // 重置冲突
 
     try {
       const res = await fetch(`/api/merchant/${merchantId}/knowledge/ai-organize`, {
@@ -286,6 +299,11 @@ export const KnowledgePage = () => {
           weight: data.data.weight || 1.0,
         };
         setAiResult(newItem);
+
+        // 如果开启了自动检查
+        if (autoCheckConflicts) {
+          await handleCheckConflicts(newItem);
+        }
       } else {
         alert("AI整理失败，请重试");
       }
@@ -294,6 +312,29 @@ export const KnowledgePage = () => {
       alert("AI整理失败，请检查网络");
     } finally {
       setAiProcessing(false);
+    }
+  };
+
+  // 冲突检查
+  const handleCheckConflicts = async (item: KnowledgeItem) => {
+    setCheckingConflicts(true);
+    setConflicts([]);
+    try {
+      const res = await fetch(`/api/merchant/${merchantId}/knowledge/check-conflicts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          newItem: { title: item.name, content: item.content },
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setConflicts(data.conflicts || []);
+      }
+    } catch (error) {
+      console.error("冲突检测失败:", error);
+    } finally {
+      setCheckingConflicts(false);
     }
   };
 
@@ -466,6 +507,7 @@ export const KnowledgePage = () => {
                   setShowAiOrganize(false);
                   setAiRawText("");
                   setAiResult(null);
+                  setConflicts([]); // 重置状态
                 }}
               >
                 <X size={20} />
@@ -485,6 +527,22 @@ export const KnowledgePage = () => {
                   placeholder="例如：我们景区门票成人60元，儿童半价30元，65岁以上老人免费..."
                   className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900"
                 />
+              </div>
+
+              <div className="flex items-center justify-between bg-slate-50 dark:bg-slate-900/50 p-3 rounded-lg">
+                <div className="flex flex-col">
+                  <span className="text-sm font-medium">智能去重检测</span>
+                  <span className="text-xs text-slate-500">整理后自动对比现有库，防止重复添加</span>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={autoCheckConflicts}
+                    onChange={e => setAutoCheckConflicts(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-purple-600"></div>
+                </label>
               </div>
 
               <button
@@ -531,6 +589,32 @@ export const KnowledgePage = () => {
                     </div>
                   </div>
 
+                  {/* 冲突显示区 */}
+                  {conflicts.length > 0 && (
+                    <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg space-y-2">
+                      <h4 className="text-sm font-bold text-amber-800 flex items-center gap-1">
+                        ⚠️ 发现 {conflicts.length} 处潜在冲突
+                      </h4>
+                      {conflicts.map((c, i) => (
+                        <div key={i} className="text-xs text-amber-700 border-l-2 border-amber-300 pl-2">
+                          <p className="font-medium">与旧条目冲突：{c.originalTitle}</p>
+                          <p>原因：{c.reason}</p>
+                          <p className="mt-1 font-bold text-purple-700">💡 建议：{c.suggestion}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {!autoCheckConflicts && !conflicts.length && (
+                    <button
+                      onClick={() => aiResult && handleCheckConflicts(aiResult)}
+                      disabled={checkingConflicts}
+                      className="w-full mt-2 py-2 text-sm text-purple-600 border border-purple-200 rounded hover:bg-purple-50 flex items-center justify-center gap-2"
+                    >
+                      {checkingConflicts ? "检测中..." : "🔍 手动执行冲突检测"}
+                    </button>
+                  )}
+
                   <button
                     onClick={handleSaveAiResult}
                     disabled={saving}
@@ -549,6 +633,7 @@ export const KnowledgePage = () => {
                   setShowAiOrganize(false);
                   setAiRawText("");
                   setAiResult(null);
+                  setConflicts([]); // 重置状态
                 }}
                 className="w-full py-2 text-slate-600 hover:text-slate-900"
               >
@@ -611,6 +696,7 @@ export const KnowledgePage = () => {
               <div className="flex items-center gap-2 ml-4">
                 <button
                   onClick={() => {
+                    setConflicts([]); // 重置冲突状态
                     setEditingItem(item);
                     setIsAdding(false);
                   }}
@@ -646,6 +732,7 @@ export const KnowledgePage = () => {
                 onClick={() => {
                   setEditingItem(null);
                   setIsAdding(false);
+                  setConflicts([]); // 重置状态
                 }}
               >
                 <X size={20} />
@@ -739,13 +826,38 @@ export const KnowledgePage = () => {
                   <span className="text-sm">🔥 热门</span>
                 </label>
               </div>
+
+              {/* 编辑模式下的冲突显示 */}
+              {editingItem && conflicts.length > 0 && (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg space-y-2">
+                  <h4 className="text-sm font-bold text-amber-800 flex items-center gap-1">
+                    ⚠️ 发现 {conflicts.length} 处潜在冲突
+                  </h4>
+                  {conflicts.map((c, i) => (
+                    <div key={i} className="text-xs text-amber-700">
+                      <p className="font-medium">与已存知识 [{c.originalTitle}] 重合</p>
+                      <p>建议：{c.suggestion}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="p-4 border-t border-slate-200 dark:border-slate-700 flex justify-end gap-3">
+              {!isAdding && (
+                <button
+                  onClick={() => editingItem && handleCheckConflicts(editingItem)}
+                  disabled={checkingConflicts || saving}
+                  className="mr-auto px-3 py-2 text-sm text-purple-600 hover:bg-purple-50 rounded"
+                >
+                  {checkingConflicts ? "检测中..." : "🔍 查重检测"}
+                </button>
+              )}
               <button
                 onClick={() => {
                   setEditingItem(null);
                   setIsAdding(false);
+                  setConflicts([]); // 重置状态
                 }}
                 className="px-4 py-2 text-slate-600 hover:text-slate-900"
               >

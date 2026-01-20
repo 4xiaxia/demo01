@@ -1,9 +1,29 @@
 /// <reference types="vite/client" />
 
 /**
- * AI API 配置 (Secure Client Version)
+ * 🔒 AI API 配置 (Secure Client Version)
  *
+ * ============================================
+ * ✅ 安全更新完成（2026-01-20）
+ * ============================================
+ * 1. ✅ 所有 API 调用已迁移到后端代理
+ *    - Chat: POST /api/chat ✅
+ *    - TTS: POST /api/tts ✅
+ *    - ASR: POST /api/asr ✅ (新增！)
+ *
+ * 2. ✅ 前端完全移除 API Key
+ *    - ❌ 不再使用 VITE_ZHIPU_API_KEY
+ *    - ❌ 不再使用 VITE_SILICONFLOW_API_KEY
+ *    - ❌ 不再使用 VITE_DASHSCOPE_API_KEY
+ *    - ✅ API Key 完全隔离在后端
+ *
+ * 3. ✅ 后台配置管理
+ *    - 商家 API Key 只保存在服务端
+ *    - 前端只显示脱敏信息 (sk-****)
+ *
+ * ============================================
  * 修改说明：
+ * ============================================
  * 1. 移除了前端直接的 API Key 引用 (安全！)
  * 2. 所有请求转发给本地 Server (/api/...)
  * 3. 保持了函数签名一致，兼容原有代码
@@ -181,50 +201,59 @@ export async function textToSpeech(
   }
 }
 
-// ============ ASR (暂时保留前端调用，Server待实现) ============
-// 注意：为了完整安全性，后续应将此也移至 Server
+// ============ ASR 语音识别 (Via Server) ============
+// ✅ 安全：所有 API 调用通过后端代理
 export interface ASRResponse {
   success: boolean;
   text?: string;
   error?: string;
+  provider?: string;
+  duration?: number;
 }
 
-export const ASR_CONFIG = {
-  url: "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions",
-  model: "glm-asr-2512",
-  // ⚠️ 临时妥协：这里还得用 Key，否则语音无法识别。
-  // 建议后续在 Server 实现 /api/asr
-  get apiKey() {
-    return (import.meta.env.VITE_ZHIPU_API_KEY as string) || "";
-  },
-};
-
+/**
+ * 语音转文字（ASR）-> 转发给 Server
+ * 
+ * ✅ 安全更新（2026-01-20）
+ * - 移除前端 VITE_ZHIPU_API_KEY
+ * - 所有调用通过 /api/asr 后端代理
+ * - API Key 不再暴露到前端
+ */
 export async function speechToText(audioFile: File | Blob): Promise<ASRResponse> {
   try {
-    if (!ASR_CONFIG.apiKey) {
-      return { success: false, error: "ASR需要配置VITE_ZHIPU_API_KEY (目前暂未走Server代理)" };
-    }
+    console.log(`🎤 语音识别 (Via Server)...`);
 
-    const mimeType = audioFile.type || "audio/webm";
-    let extension = "webm";
-    if (mimeType.includes("wav")) extension = "wav";
-
-    const fileName = `recording.${extension}`;
+    // 创建 FormData
     const formData = new FormData();
-    formData.append("model", ASR_CONFIG.model);
-    formData.append("file", audioFile, fileName);
+    formData.append("file", audioFile, "recording.wav");
 
-    const response = await fetch(ASR_CONFIG.url, {
+    // 请求后端代理
+    const response = await fetch("/api/asr", {
       method: "POST",
-      headers: { Authorization: `Bearer ${ASR_CONFIG.apiKey}` },
       body: formData,
+      // ✅ 不需要 Authorization header，后端会处理
     });
 
-    if (!response.ok) throw new Error(await response.text());
-    const data = (await response.json()) as { text?: string };
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: "Unknown error" }));
+      throw new Error(errorData.error || `Server Error: ${response.status}`);
+    }
 
-    return { success: true, text: data.text || "" };
+    const data = (await response.json()) as ASRResponse;
+    
+    console.log(`✅ 识别成功: "${data.text?.slice(0, 50)}..."`);
+    
+    return {
+      success: true,
+      text: data.text || "",
+      provider: data.provider,
+      duration: data.duration,
+    };
   } catch (error) {
-    return { success: false, error: error instanceof Error ? error.message : "Unknown" };
+    console.error(`❌ ASR 调用异常:`, error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown error",
+    };
   }
 }

@@ -1,10 +1,21 @@
 import { NavLink } from "react-router-dom";
 import { cn } from "@/lib/utils";
-import { LayoutDashboard, Database, Settings, MessageSquare, Activity } from "lucide-react";
+import { LayoutDashboard, Database, Settings, MessageSquare, Activity, Zap } from "lucide-react";
 import { useState } from "react";
 
-export function Sidebar() {
+interface SidebarProps {
+  merchantId: string;
+}
+
+/**
+ * 商家后台侧边栏
+ *
+ * 所有链接都基于 /merchant/{merchantId}/ 前缀
+ * 设计理念：每个商家的后台是独立的"房间"
+ */
+export function Sidebar({ merchantId }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
+  const basePath = `/merchant/${merchantId}`;
 
   return (
     <aside
@@ -20,7 +31,7 @@ export function Sidebar() {
             <div className="w-6 h-6 bg-slate-900 rounded-md flex items-center justify-center text-white font-bold text-xs">
               4.0
             </div>
-            <span className="font-bold text-lg tracking-tight">商家后台</span>
+            <span className="font-bold text-lg tracking-tight">{merchantId}</span>
           </div>
         )}
         {collapsed && (
@@ -44,7 +55,7 @@ export function Sidebar() {
 
       {/* Nav */}
       <nav className="flex-1 p-3 space-y-1">
-        <NavItem to="/admin" end icon={<LayoutDashboard size={20} />} collapsed={collapsed}>
+        <NavItem to={basePath} end icon={<LayoutDashboard size={20} />} collapsed={collapsed}>
           仪表盘
         </NavItem>
 
@@ -55,16 +66,16 @@ export function Sidebar() {
           </div>
         )}
 
-        <NavItem to="/admin/config" icon={<Settings size={20} />} collapsed={collapsed}>
+        <NavItem to={`${basePath}/config`} icon={<Settings size={20} />} collapsed={collapsed}>
           ⚙️ 配置生成器
         </NavItem>
-        <NavItem to="/admin/knowledge" icon={<Database size={20} />} collapsed={collapsed}>
+        <NavItem to={`${basePath}/knowledge`} icon={<Database size={20} />} collapsed={collapsed}>
           📚 知识库
         </NavItem>
-        <NavItem to="/admin/hot-questions" icon={<Activity size={20} />} collapsed={collapsed}>
+        <NavItem to={`${basePath}/hot-questions`} icon={<Zap size={20} />} collapsed={collapsed}>
           🔥 热门问题
         </NavItem>
-        <NavItem to="/admin/monitor" icon={<Activity size={20} />} collapsed={collapsed}>
+        <NavItem to={`${basePath}/monitor`} icon={<Activity size={20} />} collapsed={collapsed}>
           📈 监控面板
         </NavItem>
       </nav>
@@ -72,7 +83,7 @@ export function Sidebar() {
       {/* Footer */}
       <div className="p-3 border-t border-slate-200 dark:border-slate-800">
         <NavLink
-          to="/"
+          to={`/chat?merchant=${merchantId}&userId=admin&mode=text`}
           className={cn(
             "flex items-center gap-3 px-3 py-2 text-sm font-medium text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 transition-colors rounded-lg hover:bg-slate-50 dark:hover:bg-slate-900",
             collapsed && "justify-center px-0"

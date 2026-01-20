@@ -13,7 +13,7 @@
         "费用"
       ],
       "answer": "您好！东里村景区成人票60元/人，学生票30元/人（需凭学生证），60岁以上老人免费（需凭身份证）。",
-      "hitCount": 6,
+      "hitCount": 12,
       "lastUpdated": "2026-01-15T23:28:00Z",
       "enabled": true,
       "createdAt": "2026-01-15T23:28:00Z",
@@ -49,13 +49,13 @@
         "地址"
       ],
       "answer": "东里村景区位于福建省莆田市秀屿区东峤镇。您可以乘坐公交361路到东里村站下车，或自驾导航\"东里村景区\"即可。",
-      "hitCount": 4,
+      "hitCount": 18,
       "lastUpdated": "2026-01-15T23:28:00Z",
       "enabled": true,
       "createdAt": "2026-01-15T23:28:00Z",
       "source": "manual"
     }
   ],
-  "updatedAt": 1768644413813,
+  "updatedAt": 1768861575030,
   "version": 3
 }

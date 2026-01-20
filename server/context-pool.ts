@@ -72,7 +72,7 @@ interface ContextTurn {
   inputType?: "text" | "voice";
   source?: string;
   found?: boolean;
-  timestamp: number;
+  timestamp?: number;
   ticketId?: string;
 }
 
@@ -304,6 +304,10 @@ class ContextPool {
 
   /**
    * 获取池子状态（用于监控）
+   *
+   * 安全整改：使用 SCAN 命令代替 KEYS 命令
+   * KEYS 会阻塞 Redis 单线程，在 Key 数量较多时会导致系统假死
+   * SCAN 通过游标分批遍历，对生产环境更友好
    */
   async getStatus(): Promise<{
     redisConnected: boolean;
@@ -314,9 +318,17 @@ class ContextPool {
 
     if (this.redis) {
       try {
-        // 获取所有context key的数量
-        const keys = await this.redis.keys(`${this.KEY_PREFIX}*`);
-        keyCount = keys.length;
+        // 使用 SCAN 代替 KEYS 避免阻塞，count: 100 表示每批读取100个
+        let count = 0;
+        const stream = this.redis.scanStream({
+          match: `${this.KEY_PREFIX}*`,
+          count: 100,
+        });
+
+        for await (const keys of stream) {
+          count += keys.length;
+        }
+        keyCount = count;
       } catch (error) {
         console.error("[Context Pool] 获取key数量失败:", error);
       }
@@ -331,6 +343,8 @@ class ContextPool {
 
   /**
    * 获取最近的对话记录（用于监控面板）
+   *
+   * 优化：流式获取所有商户 Key，并限制处理数量
    */
   async getRecentDialogs(
     merchantId: string,
@@ -353,9 +367,17 @@ class ContextPool {
     }
 
     try {
-      // 获取该商户所有用户的keys
-      const pattern = `${this.KEY_PREFIX}${merchantId}:*`;
-      const keys = await this.redis.keys(pattern);
+      // 使用 SCAN 流式获取，避免 KEYS 导致的大规模内存占用
+      const allKeys: string[] = [];
+      const stream = this.redis.scanStream({
+        match: `${this.KEY_PREFIX}${merchantId}:*`,
+        count: 100,
+      });
+
+      for await (const keys of stream) {
+        allKeys.push(...keys);
+        if (allKeys.length >= 100) break; // 最多处理100个用户
+      }
 
       const allDialogs: Array<{
         timestamp: number;
@@ -370,7 +392,7 @@ class ContextPool {
       }> = [];
 
       // 从每个key读取最近的对话
-      for (const key of keys.slice(0, 50)) {
+      for (const key of allKeys.slice(0, 50)) {
         // 最多查50个用户
         const items = await this.redis.lrange(key, -20, -1); // 每个用户最近20条
 
@@ -389,8 +411,8 @@ class ContextPool {
               i + 1 < items.length ? (JSON.parse(items[i + 1]) as ContextTurn) : null;
 
             allDialogs.push({
-              timestamp: turn.timestamp,
-              traceId: turn.ticketId || "",
+              timestamp: turn.timestamp || Date.now(),
+              traceId: turn.ticketId || `temp-${turn.timestamp || Date.now()}`,
               userId,
               inputType: turn.inputType || "text",
               question: turn.content,
@@ -434,38 +456,42 @@ class ContextPool {
     }
 
     try {
-      // 从所有keys中查找
-      const pattern = `${this.KEY_PREFIX}*`;
-      const keys = await this.redis.keys(pattern);
+      // 使用 SCAN 流式查找 TraceId
+      const stream = this.redis.scanStream({
+        match: `${this.KEY_PREFIX}*`,
+        count: 100,
+      });
 
-      for (const key of keys) {
-        const items = await this.redis.lrange(key, 0, -1);
+      for await (const keys of stream) {
+        for (const key of keys) {
+          const items = await this.redis.lrange(key, 0, -1);
 
-        for (let i = 0; i < items.length; i++) {
-          const turn = JSON.parse(items[i]) as ContextTurn;
+          for (let i = 0; i < items.length; i++) {
+            const turn = JSON.parse(items[i]) as ContextTurn;
 
-          if (turn.ticketId === traceId && turn.role === "user") {
-            // 提取merchantId和userId
-            const parts = key.split(":");
-            const merchantId = parts[1] || "unknown";
-            const userId = parts[2] || "unknown";
+            if (turn.ticketId === traceId && turn.role === "user") {
+              // 提取merchantId和userId
+              const parts = key.split(":");
+              const merchantId = parts[1] || "unknown";
+              const userId = parts[2] || "unknown";
 
-            // 查找对应的assistant回复
-            const nextTurn =
-              i + 1 < items.length ? (JSON.parse(items[i + 1]) as ContextTurn) : null;
+              // 查找对应的assistant回复
+              const nextTurn =
+                i + 1 < items.length ? (JSON.parse(items[i + 1]) as ContextTurn) : null;
 
-            return {
-              timestamp: turn.timestamp,
-              traceId: turn.ticketId || "",
-              userId,
-              merchantId,
-              inputType: turn.inputType || "text",
-              question: turn.content,
-              answer: nextTurn?.role === "assistant" ? nextTurn.content : undefined,
-              intent: turn.intent || "",
-              source: nextTurn?.source || "",
-              found: turn.found !== false,
-            };
+              return {
+                timestamp: turn.timestamp || Date.now(),
+                traceId: turn.ticketId || "",
+                userId,
+                merchantId,
+                inputType: turn.inputType || "text",
+                question: turn.content,
+                answer: nextTurn?.role === "assistant" ? nextTurn.content : undefined,
+                intent: turn.intent || "",
+                source: nextTurn?.source || "",
+                found: turn.found !== false,
+              };
+            }
           }
         }
       }

@@ -1,18 +1,45 @@
+import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { Settings, BookOpen, Activity } from "lucide-react";
+import { Settings, BookOpen, Activity, Zap, Store } from "lucide-react";
+import { configManager } from "@/core/config-manager";
+import { useMerchantId } from "@/hooks/useMerchantId";
 
 export default function DashboardPage() {
+  const merchantId = useMerchantId();
+  const basePath = `/merchant/${merchantId}`;
+  const [siteName, setSiteName] = useState("智能导游系统");
+
+  useEffect(() => {
+    const loadConfig = async () => {
+      try {
+        const config = await configManager.loadConfig();
+        setSiteName(config.theme?.title || config.name || "智能导游系统");
+      } catch {
+        // 使用默认值
+      }
+    };
+    loadConfig();
+  }, []);
+
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold text-slate-900 dark:text-white">管理后台</h1>
-        <p className="text-slate-500 dark:text-slate-400 mt-2">智能导游系统 4.0 - 东里村景区</p>
+        <div className="flex items-center gap-3">
+          <h1 className="text-3xl font-bold text-slate-900 dark:text-white">管理后台</h1>
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 dark:bg-blue-900/20 rounded-full">
+            <Store size={14} className="text-blue-500" />
+            <span className="text-sm font-medium text-blue-600 dark:text-blue-400">
+              {merchantId}
+            </span>
+          </div>
+        </div>
+        <p className="text-slate-500 dark:text-slate-400 mt-2">智能导游系统 4.0 - {siteName}</p>
       </div>
 
       {/* 快捷入口 */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <Link
-          to="/admin/config"
+          to={`${basePath}/config`}
           className="block p-6 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-blue-500 dark:hover:border-blue-500 transition-colors"
         >
           <div className="flex items-center gap-3">
@@ -21,13 +48,13 @@ export default function DashboardPage() {
             </div>
             <div>
               <h3 className="font-semibold text-slate-900 dark:text-white">配置生成器</h3>
-              <p className="text-sm text-slate-500">API、Prompt、主题设置</p>
+              <p className="text-sm text-slate-500">API、Prompt、主题</p>
             </div>
           </div>
         </Link>
 
         <Link
-          to="/admin/knowledge"
+          to={`${basePath}/knowledge`}
           className="block p-6 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-green-500 dark:hover:border-green-500 transition-colors"
         >
           <div className="flex items-center gap-3">
@@ -36,13 +63,28 @@ export default function DashboardPage() {
             </div>
             <div>
               <h3 className="font-semibold text-slate-900 dark:text-white">知识库</h3>
-              <p className="text-sm text-slate-500">编辑知识条目、批量导入</p>
+              <p className="text-sm text-slate-500">编辑、导入导出</p>
             </div>
           </div>
         </Link>
 
         <Link
-          to="/admin/monitor"
+          to={`${basePath}/hot-questions`}
+          className="block p-6 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-orange-500 dark:hover:border-orange-500 transition-colors"
+        >
+          <div className="flex items-center gap-3">
+            <div className="p-3 bg-orange-100 dark:bg-orange-900/30 rounded-lg">
+              <Zap className="w-6 h-6 text-orange-600 dark:text-orange-400" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-slate-900 dark:text-white">热门问题</h3>
+              <p className="text-sm text-slate-500">缓存答案管理</p>
+            </div>
+          </div>
+        </Link>
+
+        <Link
+          to={`${basePath}/monitor`}
           className="block p-6 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-purple-500 dark:hover:border-purple-500 transition-colors"
         >
           <div className="flex items-center gap-3">
@@ -51,7 +93,7 @@ export default function DashboardPage() {
             </div>
             <div>
               <h3 className="font-semibold text-slate-900 dark:text-white">监控面板</h3>
-              <p className="text-sm text-slate-500">查看日志、统计、报缺</p>
+              <p className="text-sm text-slate-500">日志、统计、报缺</p>
             </div>
           </div>
         </Link>
@@ -60,11 +102,11 @@ export default function DashboardPage() {
       {/* 系统状态 */}
       <div className="bg-white dark:bg-slate-800 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
         <h2 className="text-xl font-semibold text-slate-900 dark:text-white mb-4">系统状态</h2>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <StatCard label="Agent A" value="运行中" color="bg-green-100 text-green-600" />
-          <StatCard label="Agent B" value="运行中" color="bg-green-100 text-green-600" />
-          <StatCard label="Agent C" value="运行中" color="bg-green-100 text-green-600" />
-          <StatCard label="Agent D" value="运行中" color="bg-green-100 text-green-600" />
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <StatCard label="Agent A (意图识别)" value="运行中" color="bg-green-100 text-green-600" />
+          <StatCard label="Agent B (决策中心)" value="运行中" color="bg-green-100 text-green-600" />
+          <StatCard label="Agent C (知识库)" value="运行中" color="bg-green-100 text-green-600" />
+          <StatCard label="Agent D (监控)" value="运行中" color="bg-green-100 text-green-600" />
         </div>
       </div>
 
@@ -97,7 +139,17 @@ export default function DashboardPage() {
               3
             </div>
             <div>
-              <p className="text-slate-700 dark:text-slate-300">访问前台页面开始测试</p>
+              <p className="text-slate-700 dark:text-slate-300">
+                访问前台页面测试：
+                <a
+                  href={`/chat?merchant=${merchantId}&userId=test&mode=text`}
+                  className="ml-2 text-blue-600 hover:underline"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  /chat?merchant={merchantId}
+                </a>
+              </p>
             </div>
           </div>
         </div>
